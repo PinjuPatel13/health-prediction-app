@@ -36,11 +36,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Sidebar for symptom selection
-with st.sidebar:
-    st.header('Symptom Selection')
-    selected_symptoms = [st.checkbox(symptom) for symptom in symptom_list]
-
 # Function to display prediction explanation and health tips
 def show_explanation(prediction):
     if prediction == "Dengue":
@@ -64,33 +59,42 @@ def show_explanation(prediction):
         st.write("### Health Tips:")
         st.write("It is important to consult a doctor for accurate diagnosis and treatment.")
 
+# Sidebar for symptom selection
+with st.sidebar:
+    st.header('Symptom Selection')
+    selected_symptoms = [st.checkbox(symptom) for symptom in symptom_list]
+
 # Button to predict health issue
 if st.button("Predict Health Issue"):
-    # Convert symptoms input into a numpy array (1 for symptom present, 0 for absent)
-    symptoms = np.array(selected_symptoms)
-
-    # Ensure symptoms length is correct
-    if symptoms.shape[0] == 64:
-        # Show loading spinner while making prediction
-        with st.spinner('Making prediction...'):
-            prediction = model.predict(symptoms.reshape(1, -1))
-
-        # Show prediction result
-        st.success(f"Predicted Health Issue: **{prediction[0]}**")
-        
-        # Display the explanation and health tips for the prediction
-        show_explanation(prediction[0])
-        
-        # Visualize the prediction probabilities
-        prediction_probs = model.predict_proba(symptoms.reshape(1, -1))[0]
-        labels = model.classes_
-
-        fig, ax = plt.subplots()
-        ax.barh(labels, prediction_probs)
-        ax.set_xlabel('Probability')
-        ax.set_title('Health Issue Prediction Probabilities')
-
-        st.pyplot(fig)
-        
+    # Check if at least one symptom is selected
+    if not any(selected_symptoms):
+        st.error("Please select at least one symptom before predicting.")
     else:
-        st.error("There was an issue with the input data. Please check the symptoms again.")
+        # Convert symptoms input into a numpy array (1 for symptom present, 0 for absent)
+        symptoms = np.array(selected_symptoms)
+
+        # Ensure symptoms length is correct
+        if symptoms.shape[0] == 64:
+            # Show loading spinner while making prediction
+            with st.spinner('Making prediction...'):
+                prediction = model.predict(symptoms.reshape(1, -1))
+
+            # Show prediction result
+            st.success(f"Predicted Health Issue: **{prediction[0]}**")
+            
+            # Display the explanation and health tips for the prediction
+            show_explanation(prediction[0])
+            
+            # Visualize the prediction probabilities
+            prediction_probs = model.predict_proba(symptoms.reshape(1, -1))[0]
+            labels = model.classes_
+
+            fig, ax = plt.subplots()
+            ax.barh(labels, prediction_probs)
+            ax.set_xlabel('Probability')
+            ax.set_title('Health Issue Prediction Probabilities')
+
+            st.pyplot(fig)
+            
+        else:
+            st.error("There was an issue with the input data. Please check the symptoms again.")
