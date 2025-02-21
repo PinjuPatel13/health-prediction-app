@@ -1,100 +1,217 @@
 import streamlit as st
+import re
+import json
 import numpy as np
-import joblib
-import matplotlib.pyplot as plt
+import cv2
+from PIL import Image
+from paddleocr import PaddleOCR
+import plotly.express as px
+import pandas as pd
+from pdf2image import convert_from_bytes
+from transformers import pipeline
+import os
 
-# Load the trained model
-model = joblib.load('health_issue_model.pkl')
+ocr = PaddleOCR(use_angle_cls=True, lang='en')
 
-# List of symptoms
-symptom_list = [
-    "Sudden Fever", "Headache", "Mouth Bleed", "Nose Bleed", "Muscle Pain", "Joint Pain",
-    "Vomiting", "Rash", "Diarrhea", "Hypotension", "Pleural Effusion", "Ascites", "Gastro Bleeding",
-    "Swelling", "Nausea", "Chills", "Myalgia", "Digestion Trouble", "Fatigue", "Skin Lesions",
-    "Stomach Pain", "Orbital Pain", "Neck Pain", "Weakness", "Back Pain", "Weight Loss",
-    "Gum Bleed", "Jaundice", "Coma", "Dizziness", "Inflammation", "Red Eyes", "Loss of Appetite",
-    "Urination Loss", "Slow Heart Rate", "Abdominal Pain", "Light Sensitivity", "Yellow Skin",
-    "Yellow Eyes", "Facial Distortion", "Microcephaly", "Rigor", "Bitter Tongue", "Convulsion",
-    "Anemia", "Cocacola Urine", "Hypoglycemia", "Prostration", "Hyperpyrexia", "Stiff Neck",
-    "Irritability", "Confusion", "Tremor", "Paralysis", "Lymph Swells", "Breathing Restriction",
-    "Toe Inflammation", "Finger Inflammation", "Lips Irritation", "Itchiness", "Ulcers", "Toenail Loss",
-    "Speech Problem", "Bullseye Rash"
-]
+# Load pre-trained BioBERT model for medical text classification
+#medical_ai = pipeline("text-classification", model="distilbert-base-uncased")
+medical_ai = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
 
-# Streamlit app title
-st.title('Health Issue Prediction Based on Symptoms')
 
-# Custom CSS styling
-st.markdown("""
-    <style>
-    .stButton>button {
-        background-color: #4CAF50;
-        color: white;
-        font-size: 18px;
-        border-radius: 10px;
+# Load past medical reports (if available)
+db_file = "diagnosed.csv"
+if os.path.exists(db_file):
+    past_reports = pd.read_csv(db_file)
+else:
+    past_reports = pd.DataFrame(columns=["report_text", "predicted_disease"])
+
+
+def advanced_preprocess_image(image):
+    img_array = np.array(image)
+
+    # Convert to grayscale
+    gray = cv2.cvtColor(img_array, cv2.COLOR_BGR2GRAY)
+
+    # Apply contrast adjustment
+    alpha = 1.5  # Increase contrast
+    beta = 10    # Increase brightness
+    adjusted = cv2.convertScaleAbs(gray, alpha=alpha, beta=beta)
+
+    # Apply noise reduction
+    denoised = cv2.fastNlMeansDenoising(adjusted, None, 30, 7, 21)
+
+    # Apply adaptive thresholding for better text extraction
+    processed = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+
+    return processed
+
+
+def preprocess_image(image):
+    img_array = np.array(image)
+    gray = cv2.cvtColor(img_array, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    threshold = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+    return threshold
+
+def save_ocr_results_to_json(result, json_file="extracted_data.json"):
+    extracted_data = []
+    for line in result[0]:  
+        text = line[1][0].strip()  
+        extracted_data.append(text)
+    json_data = {"extracted_text": extracted_data}
+    with open(json_file, 'w', encoding='utf-8') as file:
+        json.dump(json_data, file, indent=4)
+    return json_file
+
+def extract_values_from_json(json_file):
+    with open(json_file, 'r', encoding='utf-8') as file:
+        data = json.load(file)
+    
+    extracted_text = data.get("extracted_text", [])
+    extracted_text = st.text_area("Edit extracted text if needed:", '\n'.join(extracted_text)).split('\n')
+    
+    parameters = {}
+    
+    test_mapping = {
+        "wbc": ["wbc", "total wbc count", "white blood cells"],
+        "lymp": ["lymp", "lymphocytes percentage"],
+        "neutp": ["neutp", "neutrophils percentage"],
+        "lymn": ["lymn", "lymphocytes count"],
+        "neutn": ["neutn", "neutrophils count"],
+        "rbc": ["rbc", "red blood cells"],
+        "hgb": ["hgb", "hemoglobin"],
+        "hct": ["hct", "hematocrit"],
+        "mcv": ["mcv", "mean corpuscular volume"],
+        "mch": ["mch", "mean corpuscular hemoglobin"],
+        "mchc": ["mchc", "mean corpuscular hemoglobin concentration"],
+        "plt": ["plt", "platelets", "platelet count"],
+        "pdw": ["pdw", "platelet distribution width"],
+        "pct": ["pct", "procalcitonin"],
     }
-    </style>
-""", unsafe_allow_html=True)
 
-# Function to display prediction explanation and health tips
-def show_explanation(prediction):
-    if prediction == "Dengue":
-        st.write("### Explanation:")
-        st.write("Dengue fever is caused by a virus transmitted through mosquito bites. It typically involves high fever and severe joint pain.")
-        st.write("### Health Tips:")
-        st.write("Stay hydrated, avoid mosquito bites, and consult a healthcare provider for further tests.")
-    elif prediction == "Malaria":
-        st.write("### Explanation:")
-        st.write("Malaria is caused by a parasite spread by mosquitoes. Common symptoms include fever, chills, and sweating.")
-        st.write("### Health Tips:")
-        st.write("Seek medical attention for diagnosis and appropriate treatment, typically antimalarial drugs.")
-    elif prediction == "Zika":
-        st.write("### Explanation:")
-        st.write("Zika virus is transmitted through mosquitoes and can cause fever, rash, and joint pain.")
-        st.write("### Health Tips:")
-        st.write("Stay hydrated and rest. Avoid mosquito bites to prevent further infection.")
-    else:
-        st.write("### Explanation:")
-        st.write(f"The prediction '{prediction}' requires further medical investigation. Please consult a healthcare provider.")
-        st.write("### Health Tips:")
-        st.write("It is important to consult a doctor for accurate diagnosis and treatment.")
+    for i in range(len(extracted_text) - 1):
+        key = extracted_text[i].strip().lower()
+        value = re.findall(r"[-+]?(?:\d*\.\d+|\d+)", extracted_text[i + 1].strip())
+        value = float(value[0]) if value else None
+        
+        for standard_name, variations in test_mapping.items():
+            if key in variations or key == standard_name:
+                parameters[standard_name] = value
+                break
+    
+    # ✅ Check if no valid values were extracted
+    if not parameters:
+        st.warning("⚠️ No valid numerical values detected! Please correct the extracted text manually or upload a clearer report.")
+    
+    return parameters
 
-# Sidebar for symptom selection
-with st.sidebar:
-    st.header('Symptom Selection')
-    selected_symptoms = [st.checkbox(symptom) for symptom in symptom_list]
 
-# Button to predict health issue
-if st.button("Predict Health Issue"):
-    # Check if at least one symptom is selected
-    if not any(selected_symptoms):
-        st.error("Please select at least one symptom before predicting.")
-    else:
-        # Convert symptoms input into a numpy array (1 for symptom present, 0 for absent)
-        symptoms = np.array(selected_symptoms)
+import pandas as pd
+import os
+from transformers import pipeline
 
-        # Ensure symptoms length is correct
-        if symptoms.shape[0] == 64:
-            # Show loading spinner while making prediction
-            with st.spinner('Making prediction...'):
-                prediction = model.predict(symptoms.reshape(1, -1))
+# Load Zero-Shot Classification Model
+medical_ai = pipeline("zero-shot-classification", model="microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext")
 
-            # Show prediction result
-            st.success(f"Predicted Health Issue: **{prediction[0]}**")
-            
-            # Display the explanation and health tips for the prediction
-            show_explanation(prediction[0])
-            
-            # Visualize the prediction probabilities
-            prediction_probs = model.predict_proba(symptoms.reshape(1, -1))[0]
-            labels = model.classes_
 
-            fig, ax = plt.subplots()
-            ax.barh(labels, prediction_probs)
-            ax.set_xlabel('Probability')
-            ax.set_title('Health Issue Prediction Probabilities')
+# Load past medical reports
+db_file = "diagnosed.csv"
+if os.path.exists(db_file):
+    past_reports = pd.read_csv(db_file)
+else:
+    past_reports = pd.DataFrame(columns=["WBC", "LYMp", "NEUTp", "LYMn", "NEUTn", "RBC", "HGB", "HCT", "MCV", "MCH", "MCHC", "PLT", "PDW", "PCT", "Diagnosis"])
 
-            st.pyplot(fig)
-            
+# Function to predict disease
+def predict_disease(parameters):
+    global past_reports
+
+    # Convert extracted values into a DataFrame-like structure
+    report_df = pd.DataFrame([parameters])
+
+    # Ensure column names match
+    past_reports.columns = past_reports.columns.str.lower()
+    report_df.columns = report_df.columns.str.lower()
+
+    # Ensure "Diagnosis" column exists
+    if "Diagnosis" not in past_reports.columns:
+        past_reports["Diagnosis"] = None  # Create empty Diagnosis column
+
+    # Find common columns
+    common_cols = list(set(parameters.keys()) & set(past_reports.columns))
+
+    # Ensure report_df and past_reports have the same column order
+    report_df = report_df[common_cols]  
+    past_reports = past_reports[common_cols + ["Diagnosis"]]  
+
+    # Reset index to avoid mismatches
+    past_reports = past_reports.reset_index(drop=True)
+    report_df = report_df.reset_index(drop=True)
+
+    # Compare reports (only on common columns)
+    if not common_cols:
+        return "⚠️ No matching columns found in the dataset. Using AI prediction."
+
+       
+    min_matching_cols = max(1, len(common_cols) // 2)  # Match at least half of the columns
+
+    match = past_reports[
+        past_reports[common_cols].apply(lambda row: (row == report_df.iloc[0][common_cols]).sum() >= min_matching_cols, axis=1)
+    ]
+
+    if not match.empty:
+        return f"📌 Matched Previous Case: {match.iloc[0]['Diagnosis']}"
+
+
+    if not match.empty:
+        return f"📌 Matched Previous Case: {match.iloc[0]['Diagnosis']}"
+
+    # If no match, use AI for classification
+    report_text = "\n".join([f"{k}: {v}" for k, v in parameters.items()])
+    prompt = f"""A patient's lab report contains the following test results:
+
+{report_text}
+
+Based on these lab values, what potential medical conditions could this patient have?"""
+
+    labels = ["Anemia", "Leukemia", "Iron Deficiency", "Polycythemia", "Diabetes", "Thyroid Disorder", "Healthy"]
+    prediction = medical_ai(prompt, candidate_labels=labels)
+    diagnosis = prediction["labels"][0]  # Most likely condition
+
+    # Save new report to the CSV file
+    new_entry = report_df.copy()
+    new_entry["Diagnosis"] = diagnosis
+    past_reports = pd.concat([past_reports, new_entry], ignore_index=True)
+    past_reports.to_csv(db_file, index=False)
+
+    return f"🔬 AI-Based Prediction: {diagnosis}"
+
+
+def main():
+    st.title("Medical Report Analysis with AI")
+    report_type = st.selectbox("Select Report Type", ["CBC", "Lipid Profile", "Thyroid Panel", "Diabetes Panel"])
+    uploaded_files = st.file_uploader(f"Upload {report_type} report images or PDFs", type=["jpg", "jpeg", "png", "bmp", "pdf"], accept_multiple_files=True)
+    
+    all_parameters = []
+    for uploaded_file in uploaded_files:
+        if uploaded_file.type == "application/pdf":
+            images = convert_from_bytes(uploaded_file.read())
         else:
-            st.error("There was an issue with the input data. Please check the symptoms again.")
+            images = [Image.open(uploaded_file)]
+        
+        for image in images:
+            processed_image = preprocess_image(image)
+            result = ocr.ocr(processed_image, cls=True)
+            json_data = save_ocr_results_to_json(result)
+            parameters = extract_values_from_json(json_data)
+            if parameters:
+                all_parameters.append(parameters)
+    
+    if all_parameters:
+        st.write("### Extracted Parameters")
+        for i, parameters in enumerate(all_parameters):
+            st.write(f"#### Report {i+1}")
+            st.json(parameters)
+            st.write(predict_disease(parameters))
+    
+if __name__ == "__main__":
+    main()
